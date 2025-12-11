@@ -127,6 +127,13 @@ TRANSLATIONS = {
         'collected_properties': 'Propriedades coletadas: {}',
         'fetch_cancelled': 'Busca cancelada pelo utilizador',
         'cancel_fetch': 'Cancelar Busca',
+        'keyword_filters': 'Filtros de Palavras-Chave',
+        'keywords': 'Palavras-chave (uma por linha):',
+        'keywords_placeholder': 'Energy\nCertificate\nEnergy Certificate\nEnergy Certificate B\nCertificado Energético',
+        'case_sensitive': 'Diferenciar maiúsculas/minúsculas',
+        'highlight_matches': 'Destacar correspondências',
+        'matched_keywords': 'Palavras-chave encontradas: {}',
+        'properties_matched': '{} propriedades com correspondências',
     },
     'en': {
         'window_title': 'Idealista API Client',
@@ -228,6 +235,13 @@ TRANSLATIONS = {
         'collected_properties': 'Properties collected: {}',
         'fetch_cancelled': 'Fetch cancelled by user',
         'cancel_fetch': 'Cancel Fetch',
+        'keyword_filters': 'Keyword Filters',
+        'keywords': 'Keywords (one per line):',
+        'keywords_placeholder': 'Energy\nCertificate\nEnergy Certificate\nEnergy Certificate B\nCertificado Energético',
+        'case_sensitive': 'Case sensitive',
+        'highlight_matches': 'Highlight matches',
+        'matched_keywords': 'Keywords found: {}',
+        'properties_matched': '{} properties with matches',
     }
 }
 
@@ -330,6 +344,43 @@ class IdealistaGUI(QMainWindow):
     def tr(self, key):
         """Translate a key to the current language"""
         return TRANSLATIONS[self.current_language].get(key, key)
+
+    def get_keywords(self):
+        """Get keywords from input, one per line"""
+        text = self.keywords_input.toPlainText().strip()
+        if not text:
+            return []
+        keywords = [k.strip() for k in text.split('\n') if k.strip()]
+        return keywords
+
+    def match_keywords_in_property(self, prop):
+        """Check if property description matches any keywords
+        
+        Returns:
+            tuple: (has_match: bool, matched_keywords: list)
+        """
+        keywords = self.get_keywords()
+        if not keywords:
+            return False, []
+        
+        # Get description from property
+        description = prop.raw_data.get('description', '')
+        if not description:
+            return False, []
+        
+        # Check case sensitivity
+        case_sensitive = self.case_sensitive_check.isChecked()
+        
+        matched = []
+        for keyword in keywords:
+            if case_sensitive:
+                if keyword in description:
+                    matched.append(keyword)
+            else:
+                if keyword.lower() in description.lower():
+                    matched.append(keyword)
+        
+        return len(matched) > 0, matched
 
     def load_locations(self):
         """Load location data from JSON file"""
@@ -660,6 +711,28 @@ class IdealistaGUI(QMainWindow):
         other_group.setLayout(other_layout)
         layout.addWidget(other_group)
 
+        # Keyword filters
+        keyword_group = QGroupBox(self.tr('keyword_filters'))
+        keyword_layout = QVBoxLayout()
+
+        keyword_label = QLabel(self.tr('keywords'))
+        keyword_layout.addWidget(keyword_label)
+
+        self.keywords_input = QTextEdit()
+        self.keywords_input.setPlaceholderText(self.tr('keywords_placeholder'))
+        self.keywords_input.setMaximumHeight(100)
+        keyword_layout.addWidget(self.keywords_input)
+
+        self.case_sensitive_check = QCheckBox(self.tr('case_sensitive'))
+        keyword_layout.addWidget(self.case_sensitive_check)
+
+        self.highlight_matches_check = QCheckBox(self.tr('highlight_matches'))
+        self.highlight_matches_check.setChecked(True)  # Default enabled
+        keyword_layout.addWidget(self.highlight_matches_check)
+
+        keyword_group.setLayout(keyword_layout)
+        layout.addWidget(keyword_group)
+
         # Search button
         self.search_btn = QPushButton(self.tr('search'))
         self.search_btn.clicked.connect(self.perform_search)
@@ -873,12 +946,25 @@ class IdealistaGUI(QMainWindow):
         self.search_btn.setEnabled(True)
         self.last_response = response
 
+        # Check for keyword matches if keywords are provided
+        keywords = self.get_keywords()
+        matched_count = 0
+        if keywords:
+            for prop in response.element_list:
+                has_match, _ = self.match_keywords_in_property(prop)
+                if has_match:
+                    matched_count += 1
+
         # Update info label
         info_parts = [
             self.tr('found_properties').format(response.total),
             self.tr('page_info').format(response.actual_page, response.total_pages),
             self.tr('showing_items').format(len(response.element_list))
         ]
+        
+        if keywords and matched_count > 0:
+            info_parts.append(self.tr('properties_matched').format(matched_count))
+        
         info_text = " | ".join(info_parts)
         self.results_info.setText(info_text)
 
@@ -887,12 +973,21 @@ class IdealistaGUI(QMainWindow):
         results_text += f"{'=' * 80}\n\n"
         
         for i, prop in enumerate(response.element_list, 1):
-            results_text += f"{self.tr('property')} {i}:\n"
+            has_match, matched_keywords = self.match_keywords_in_property(prop)
+            
+            # Add marker if property matches keywords
+            marker = " ⭐ MATCH" if has_match else ""
+            
+            results_text += f"{self.tr('property')} {i}{marker}:\n"
             results_text += f"  {self.tr('code')}: {prop.property_code}\n"
             results_text += f"  {self.tr('type')}: {prop.property_type}\n"
             results_text += f"  {self.tr('address')}: {prop.address}\n"
             results_text += f"  {self.tr('price')}: {prop.price}\n"
             results_text += f"  {self.tr('operation')}: {prop.operation}\n"
+            
+            if has_match:
+                results_text += f"  {self.tr('matched_keywords')}: {', '.join(matched_keywords)}\n"
+            
             results_text += f"{'-' * 80}\n"
 
         self.results_text.setPlainText(results_text)
@@ -947,11 +1042,23 @@ class IdealistaGUI(QMainWindow):
         # Combine all responses
         total_properties = sum(len(resp.element_list) for resp in all_responses)
         
+        # Check for keyword matches if keywords are provided
+        keywords = self.get_keywords()
+        matched_count = 0
+        if keywords:
+            for response in all_responses:
+                for prop in response.element_list:
+                    has_match, _ = self.match_keywords_in_property(prop)
+                    if has_match:
+                        matched_count += 1
+        
         # Use the first response metadata
         first_response = all_responses[0]
         
         # Update info label
         info_text = self.tr('all_pages_fetched').format(total_properties)
+        if keywords and matched_count > 0:
+            info_text += f" | {self.tr('properties_matched').format(matched_count)}"
         self.results_info.setText(info_text)
 
         # Display results from all pages
@@ -959,17 +1066,28 @@ class IdealistaGUI(QMainWindow):
         results_text += f"{'=' * 80}\n"
         results_text += f"Total pages fetched: {len(all_responses)}\n"
         results_text += f"Total properties: {total_properties}\n"
+        if keywords and matched_count > 0:
+            results_text += f"Properties with keyword matches: {matched_count}\n"
         results_text += f"{'=' * 80}\n\n"
         
         property_num = 1
         for response in all_responses:
             for prop in response.element_list:
-                results_text += f"{self.tr('property')} {property_num}:\n"
+                has_match, matched_keywords = self.match_keywords_in_property(prop)
+                
+                # Add marker if property matches keywords
+                marker = " ⭐ MATCH" if has_match else ""
+                
+                results_text += f"{self.tr('property')} {property_num}{marker}:\n"
                 results_text += f"  {self.tr('code')}: {prop.property_code}\n"
                 results_text += f"  {self.tr('type')}: {prop.property_type}\n"
                 results_text += f"  {self.tr('address')}: {prop.address}\n"
                 results_text += f"  {self.tr('price')}: {prop.price}\n"
                 results_text += f"  {self.tr('operation')}: {prop.operation}\n"
+                
+                if has_match:
+                    results_text += f"  {self.tr('matched_keywords')}: {', '.join(matched_keywords)}\n"
+                
                 results_text += f"{'-' * 80}\n"
                 property_num += 1
 
@@ -981,6 +1099,8 @@ class IdealistaGUI(QMainWindow):
 
         self.statusBar().showMessage(self.tr('search_completed').format(total_properties))
         logger.info(f"Multi-page fetch completed: {total_properties} properties from {len(all_responses)} pages")
+        if keywords and matched_count > 0:
+            logger.info(f"Keyword matches: {matched_count} properties matched keywords")
 
     def export_json(self):
         """Export results to JSON"""
@@ -1003,10 +1123,28 @@ class IdealistaGUI(QMainWindow):
 
         if file_path:
             try:
-                # Collect all properties from all responses
+                # Get keywords for matching
+                keywords = self.get_keywords()
+                highlight_enabled = self.highlight_matches_check.isChecked()
+                
+                # Collect all properties from all responses and add keyword match info
                 all_properties = []
+                matched_count = 0
+                
                 for response in responses:
-                    all_properties.extend([prop.to_dict() for prop in response.element_list])
+                    for prop in response.element_list:
+                        prop_dict = prop.to_dict()
+                        
+                        # Add keyword matching information if keywords are provided
+                        if keywords:
+                            has_match, matched_keywords = self.match_keywords_in_property(prop)
+                            if highlight_enabled:
+                                prop_dict['keyword_match'] = has_match
+                                prop_dict['matched_keywords'] = matched_keywords if has_match else []
+                            if has_match:
+                                matched_count += 1
+                        
+                        all_properties.append(prop_dict)
                 
                 # Use first response for metadata
                 first_response = responses[0]
@@ -1019,7 +1157,9 @@ class IdealistaGUI(QMainWindow):
                         "items_per_page": first_response.items_per_page,
                         "properties_count": len(all_properties),
                         "export_date": datetime.now().isoformat(),
-                        "multi_page_fetch": is_multi_page
+                        "multi_page_fetch": is_multi_page,
+                        "keyword_filters": keywords if keywords else None,
+                        "properties_with_matches": matched_count if keywords else None
                     },
                     "properties": all_properties
                 }
@@ -1053,25 +1193,71 @@ class IdealistaGUI(QMainWindow):
 
         if file_path:
             try:
+                # Get keywords for matching
+                keywords = self.get_keywords()
+                highlight_enabled = self.highlight_matches_check.isChecked()
+                
                 # Collect all properties from all responses
                 all_properties = []
                 for response in responses:
                     all_properties.extend(response.element_list)
                 
-                # Collect all unique keys from all properties
-                all_keys = set()
-                for prop in all_properties:
-                    all_keys.update(prop.to_dict().keys())
+                # Define the fields we want to export in order
+                base_fieldnames = ['url', 'suggested_title', 'suggested_subtitle', 'price', 'operation', 
+                                 'province', 'municipality', 'description', 'status', 'typology']
                 
-                # Sort keys for consistent column order
-                fieldnames = sorted(all_keys)
+                # Prepare cleaned property dictionaries
+                cleaned_properties = []
+                
+                for prop in all_properties:
+                    prop_dict = prop.to_dict()
+                    cleaned_row = {}
+                    
+                    # Extract specified fields
+                    cleaned_row['url'] = prop_dict.get('url', '')
+                    
+                    # Extract title and subtitle from suggestedTexts
+                    suggested_texts = prop_dict.get('suggestedTexts', {})
+                    if isinstance(suggested_texts, dict):
+                        cleaned_row['suggested_title'] = suggested_texts.get('title', '')
+                        cleaned_row['suggested_subtitle'] = suggested_texts.get('subtitle', '')
+                    else:
+                        cleaned_row['suggested_title'] = ''
+                        cleaned_row['suggested_subtitle'] = ''
+                    
+                    cleaned_row['price'] = prop_dict.get('price', '')
+                    cleaned_row['operation'] = prop_dict.get('operation', '')
+                    cleaned_row['province'] = prop_dict.get('province', '')
+                    cleaned_row['municipality'] = prop_dict.get('municipality', '')
+                    cleaned_row['description'] = prop_dict.get('description', '')
+                    cleaned_row['status'] = prop_dict.get('status', '')
+                    
+                    # Extract typology from detailedType
+                    detailed_type = prop_dict.get('detailedType', {})
+                    if isinstance(detailed_type, dict):
+                        cleaned_row['typology'] = detailed_type.get('typology', '')
+                    else:
+                        cleaned_row['typology'] = ''
+                    
+                    # Add keyword matching information if keywords are provided
+                    if keywords and highlight_enabled:
+                        has_match, matched_keywords = self.match_keywords_in_property(prop)
+                        cleaned_row['matched_keywords'] = ', '.join(matched_keywords) if has_match else ''
+                    
+                    cleaned_properties.append(cleaned_row)
+                
+                # Build final fieldnames list
+                fieldnames = base_fieldnames.copy()
+                # Add matched keywords column if applicable
+                if keywords and highlight_enabled:
+                    fieldnames.append('matched_keywords')
 
                 with open(file_path, 'w', newline='', encoding='utf-8') as f:
-                    writer = csv.DictWriter(f, fieldnames=fieldnames)
+                    writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore')
                     writer.writeheader()
                     
-                    for prop in all_properties:
-                        writer.writerow(prop.to_dict())
+                    for row in cleaned_properties:
+                        writer.writerow(row)
 
                 QMessageBox.information(self, self.tr('success'),
                                       self.tr('export_success').format(file_path))
