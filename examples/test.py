@@ -1,11 +1,11 @@
 from idealista_api import Idealista, Search
 
 idealista = Idealista(
-    api_key="API_KEY_HERE", api_secret="API_SECRET_HERE"
+    api_key="xgz27wkan54zkyb5l3pzpzra0o3n1y1b", api_secret="xJ57kvmCyzFs"
 )
 
 s = Search(
-    "es",
+    country="asd",
     location_id="0-EU-ES-01",
     property_type="homes",
     operation="sale",
